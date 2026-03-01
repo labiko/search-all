@@ -12,6 +12,5 @@ node_modules/
 .next/
 .vercel
 
-# SDK docs (binaires volumineux)
+# SDK docs (fichiers extraits)
 docs/
-*.zip
