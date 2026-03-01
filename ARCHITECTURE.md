@@ -3,8 +3,13 @@
 ## Contexte
 
 SaaS de pointage biometrique pour la Guinee-Conakry.
-Pointeuse : **Horus E1** (reconnaissance faciale, empreinte, 4G natif, batterie 8h).
+Pointeuse : **[Horus E1-FP](https://zkteco.technology/en/product/horus-e1-fp/)** (reconnaissance faciale + empreinte, 4G natif, batterie 8h, serie FacePro).
 La pointeuse communique uniquement via le SDK Windows **zkemkeeper.dll** (composant COM/ActiveX) en UDP sur le port 4370.
+
+Variantes disponibles :
+- [Horus E1](https://zkteco.technology/en/product/horus/) — visage uniquement
+- [Horus E1-FP](https://zkteco.technology/en/product/horus-e1-fp/) — visage + empreinte ← **modele choisi**
+- [Horus E1-RFID](https://zkteco.technology/en/product/horus-e1-rfid/) — visage + badge RFID
 
 Un **PC Windows local** fait le pont (bridge) entre la pointeuse et le cloud.
 
