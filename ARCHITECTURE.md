@@ -11,7 +11,31 @@ Variantes disponibles :
 - [Horus E1-FP](https://zkteco.technology/en/product/horus-e1-fp/) — visage + empreinte ← **modele choisi**
 - [Horus E1-RFID](https://zkteco.technology/en/product/horus-e1-rfid/) — visage + badge RFID
 
-Un **PC Windows local** fait le pont (bridge) entre la pointeuse et le cloud.
+Un **PC Windows local** (celui de la RH) fait le pont (bridge) entre la pointeuse et le cloud.
+
+---
+
+## Choix technique : SDK standalone vs UTimeMaster
+
+ZKTeco propose deux options pour integrer le Horus E1-FP :
+
+| | SDK standalone ($400) | UTimeMaster (licence) |
+|---|---|---|
+| **Principe** | Acces direct PC → pointeuse via zkemkeeper.dll (UDP:4370) | Logiciel web ZKTeco (on-premise, Django) avec API REST |
+| **Cout** | $400 une fois, pas de recurrence | Licence par device, potentiellement recurrent |
+| **Temps reel** | OnAttTransactionEx (evenement instantane) | Polling uniquement (pas de webhook) |
+| **Hors-ligne** | Le bridge fonctionne sans internet, resynchronise apres | Impossible si le serveur est distant |
+| **Controle** | Total — on maitrise le code | Dependance a ZKTeco (vendor lock-in) |
+| **Enrolement** | Physique sur la pointeuse ou via SendUserFacePhoto | QR code + photo smartphone (pratique mais non documente dans l'API) |
+| **Scalabilite SaaS** | 1 SDK pour tous les sites | 1 licence par device |
+| **Effort dev** | Plus lourd (bridge Python a developper) | Plus leger (appels API REST) |
+
+**Decision : SDK standalone** — pour les raisons suivantes :
+1. **Resilience locale** : indispensable en Guinee (coupures internet/electricite frequentes)
+2. **Pas de vendor lock-in** : on possede le code, on ne depend pas d'un logiciel tiers
+3. **Cout maitrise** : $400 une fois vs licence recurrente par device
+4. **Temps reel natif** : les pointages arrivent instantanement via evenements SDK
+5. **On construit un SaaS** : notre business ne doit pas dependre d'un logiciel ZKTeco
 
 ---
 
