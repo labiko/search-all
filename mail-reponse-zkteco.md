@@ -1,39 +1,47 @@
-# Reponse a ZKTeco — Confirmation commande SDK
+# Reponse a ZKTeco — Commande SDK + Horus E1-FP
 
 **A :** [contact ZKTeco qui a repondu]
-**Objet :** Re: Horus E1-FP — We'll go with the SDK option
+**Objet :** Re: Horus E1-FP — SDK order + device purchase
 
 ---
 
 Hi,
 
-Thank you for your quick response and the detailed information.
+Thank you for your quick response and the detailed information about both options.
 
-We have reviewed both options and we would like to go with the **Standalone SDK (zkemkeeper.dll) at $400**. We will develop our own software to integrate with the Horus E1-FP.
+We have reviewed the SDK and UTimeMaster options. We would like to go with the **Standalone SDK (zkemkeeper.dll) at $400**. We will develop our own software.
 
-The reason is that our solution needs to work reliably in Guinea-Conakry where internet connectivity is unstable. Our architecture uses a local Windows PC as a bridge between the device (via SDK, UDP:4370) and our cloud platform. This gives us offline resilience, which is critical for our market.
+The reason is that our solution needs to work reliably in Guinea-Conakry where internet connectivity is unstable. A local bridge gives us offline resilience, which is critical for our market.
 
-## Order Summary
+## What we'd like to order
 
-| Item | Qty | Price |
-|------|-----|-------|
-| Horus E1-FP (Facial Recognition + Fingerprint) | 1 | TBD |
-| Standalone SDK (zkemkeeper.dll) | 1 | $400 |
+| Item | Qty |
+|------|-----|
+| Standalone SDK (zkemkeeper.dll) | 1 |
+| Horus E1-FP (Facial Recognition + Fingerprint) | 1 |
 
 **Delivery:** Paris, Ile-de-France, France
 
-## A few questions before we finalize
+We would like to purchase both the SDK and the device from you directly if possible, to simplify the process.
 
-1. **Payment method:** How can we proceed with payment for the SDK and the device? Bank transfer, credit card?
+## Questions
 
-2. **SDK delivery:** Is the SDK delivered digitally (download link) or physically?
+1. **Device pricing:** Could you provide a quotation for 1x Horus E1-FP including shipping to Paris, France? Or could you share a direct link to the product page where we can order it?
 
-3. **Horus E1-FP price:** Could you provide a quotation for 1x Horus E1-FP including shipping to Paris?
+2. **Bundle order:** Can we order the SDK ($400) and the Horus E1-FP together in a single order?
 
-4. **SDK version:** Which version of the SDK will we receive? We already have the documentation for v6.3.1.43 and v6.3.1.55. Will we get the latest version?
+3. **Payment method:** How do we proceed with payment? Bank transfer, credit card, PayPal?
 
-5. **SDK support:** Is technical support included with the $400 SDK purchase? If we encounter integration issues, can we reach out?
+4. **Delivery time:** What is the estimated delivery time to Paris for both the SDK and the device?
 
-Please let us know the next steps to place the order.
+5. **SDK delivery:** Is the SDK delivered digitally (download link) or on a physical medium?
+
+6. **SDK version:** Which version will we receive? We already have the documentation for v6.3.1.43 and v6.3.1.55. Will we get the latest version compatible with the Horus E1-FP?
+
+7. **SIM card slot:** We plan to deploy the device in Guinea-Conakry where we need 4G connectivity. Can you confirm the Horus E1-FP has a physical SIM card slot (nano-SIM or micro-SIM)? The spec sheet mentions 4G/LTE bands but doesn't explicitly mention the SIM slot.
+
+8. **Technical support:** Is support included with the SDK purchase? If we encounter integration issues, can we reach out to your technical team?
+
+Looking forward to your reply so we can proceed with the order.
 
 Best regards
