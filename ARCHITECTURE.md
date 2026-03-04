@@ -3,77 +3,76 @@
 ## Contexte
 
 SaaS de pointage biometrique pour la Guinee-Conakry.
-Pointeuse : **[Horus E1-FP](https://zkteco.technology/en/product/horus-e1-fp/)** (reconnaissance faciale + empreinte, 4G natif, batterie 8h, serie FacePro).
-La pointeuse communique uniquement via le SDK Windows **zkemkeeper.dll** (composant COM/ActiveX) en UDP sur le port 4370.
+Pointeuse : **[Horus E1-FP](https://zkteco.technology/en/product/horus-e1-fp/)** (reconnaissance faciale + empreinte, 4G natif avec Nano SIM, batterie 8h, serie FacePro).
 
 Variantes disponibles :
 - [Horus E1](https://zkteco.technology/en/product/horus/) — visage uniquement
 - [Horus E1-FP](https://zkteco.technology/en/product/horus-e1-fp/) — visage + empreinte ← **modele choisi**
 - [Horus E1-RFID](https://zkteco.technology/en/product/horus-e1-rfid/) — visage + badge RFID
 
-Un **PC Windows local** (celui de la RH) fait le pont (bridge) entre la pointeuse et le cloud.
+La pointeuse communique **directement avec le cloud** via 4G grace au **TA PUSH SDK**.
+**Pas de PC local necessaire.**
 
 ---
 
-## Choix technique : SDK standalone vs UTimeMaster
+## Choix technique : TA PUSH SDK
 
-ZKTeco propose deux options pour integrer le Horus E1-FP :
+ZKTeco propose trois options pour integrer le Horus E1-FP :
 
-| | SDK standalone ($400) | UTimeMaster (licence) |
-|---|---|---|
-| **Principe** | Acces direct PC → pointeuse via zkemkeeper.dll (UDP:4370) | Logiciel web ZKTeco (on-premise, Django) avec API REST |
-| **Cout** | $400 une fois, pas de recurrence | Licence par device, potentiellement recurrent |
-| **Temps reel** | OnAttTransactionEx (evenement instantane) | Polling uniquement (pas de webhook) |
-| **Hors-ligne** | Le bridge fonctionne sans internet, resynchronise apres | Impossible si le serveur est distant |
-| **Controle** | Total — on maitrise le code | Dependance a ZKTeco (vendor lock-in) |
-| **Enrolement** | Physique sur la pointeuse ou via SendUserFacePhoto | QR code + photo smartphone (pratique mais non documente dans l'API) |
-| **Scalabilite SaaS** | 1 SDK pour tous les sites | 1 licence par device |
-| **Effort dev** | Plus lourd (bridge Python a developper) | Plus leger (appels API REST) |
+| | SDK Standalone (zkemkeeper.dll) | UTimeMaster | TA PUSH SDK |
+|---|---|---|---|
+| **Principe** | PC local communique avec la pointeuse via UDP:4370 | Logiciel web ZKTeco avec API REST | La pointeuse pousse les donnees directement vers notre serveur via HTTP/4G |
+| **PC bridge** | ✅ Obligatoire | Selon config | ❌ **Pas necessaire** |
+| **4G natif** | Non utilise (LAN uniquement) | Selon config | ✅ **Oui** |
+| **Cout** | $400 | Licence par device | $400 |
+| **Integration cloud** | Impossible directement | Via serveur ZKTeco | ✅ **Directe (HTTP)** |
 
-**Decision : SDK standalone** — pour les raisons suivantes :
-1. **Resilience locale** : indispensable en Guinee (coupures internet/electricite frequentes)
-2. **Pas de vendor lock-in** : on possede le code, on ne depend pas d'un logiciel tiers
-3. **Cout maitrise** : $400 une fois vs licence recurrente par device
-4. **Temps reel natif** : les pointages arrivent instantanement via evenements SDK
-5. **On construit un SaaS** : notre business ne doit pas dependre d'un logiciel ZKTeco
+**Decision : TA PUSH SDK ($400)** — pour les raisons suivantes :
+1. **Pas de PC bridge** : la pointeuse parle directement au cloud via 4G
+2. **Architecture simplifiee** : moins de composants = moins de pannes
+3. **4G natif** : la pointeuse utilise sa carte SIM pour communiquer, pas besoin de WiFi/LAN
+4. **Integration directe** avec Vercel (Next.js) via HTTP POST
+5. **Ideal pour la Guinee** : fonctionne partout ou il y a du reseau mobile
 
 ---
 
 ## Vue d'ensemble
 
 ```
-┌─────────────────────────────────┐
-│         CLOUD (Internet)        │
-│                                 │
-│  ┌───────────┐   ┌───────────┐  │
-│  │  Vercel   │   │ Supabase  │  │
-│  │ (Next.js) │──>│  (BDD +   │  │
-│  │ Dashboard │   │ Realtime) │  │
-│  └───────────┘   └─────┬─────┘  │
-│                        │        │
-└────────────────────────┼────────┘
-                         │
-                    WebSocket
-                    (Realtime)
-                         │
-┌────────────────────────┼────────┐
-│         SITE LOCAL               │
-│                        │        │
-│              ┌─────────┴──────┐ │
-│              │  PC Windows    │ │
-│              │  (Python)      │ │
-│              │  Bridge Service│ │
-│              └─────────┬──────┘ │
-│                        │        │
-│                   UDP : 4370    │
-│                   (zkemkeeper)  │
-│                        │        │
-│              ┌─────────┴──────┐ │
-│              │   Horus E1     │ │
-│              │  (Pointeuse)   │ │
-│              └────────────────┘ │
-│                                 │
-└─────────────────────────────────┘
+┌──────────────────────────────────────┐
+│            CLOUD (Internet)          │
+│                                      │
+│  ┌───────────┐     ┌──────────────┐  │
+│  │  Vercel   │     │  Supabase    │  │
+│  │ (Next.js) │────>│  (BDD)       │  │
+│  │ Dashboard │     │              │  │
+│  │           │     │              │  │
+│  │ /api/webhook <──┼── INSERT     │  │
+│  │ /api/commands ──┼── SELECT     │  │
+│  └───────────┘     └──────────────┘  │
+│        ^                             │
+│        │                             │
+└────────┼─────────────────────────────┘
+         │
+    HTTP POST (JSON)
+    via 4G (Nano SIM)
+         │
+┌────────┼─────────────────────────────┐
+│  SITE  │                             │
+│        │                             │
+│  ┌─────┴──────────┐                  │
+│  │   Horus E1-FP  │                  │
+│  │   (Pointeuse)  │                  │
+│  │                │                  │
+│  │  4G Nano SIM   │                  │
+│  │  Batterie 8h   │                  │
+│  │  Face + FP     │                  │
+│  └────────────────┘                  │
+│                                      │
+│  Pas de PC. Pas de WiFi.             │
+│  Juste la pointeuse + une SIM 4G.   │
+│                                      │
+└──────────────────────────────────────┘
 ```
 
 ---
@@ -88,42 +87,35 @@ Interface web utilisee par les RH pour :
 - Consulter les pointages
 - Voir le statut de la pointeuse en temps reel
 
-Le dashboard n'a **aucun contact direct** avec la pointeuse.
-Il ecrit des **commandes** dans Supabase, que le PC local viendra lire.
+Le dashboard expose aussi des **API Routes** qui recoivent les donnees de la pointeuse :
+- `/api/webhook/attendance` — recoit les pointages en push (HTTP POST)
+- `/api/commands` — envoie des commandes a la pointeuse (ajout/suppression users)
 
-### 2. Supabase (BDD + Realtime)
+### 2. Supabase (BDD)
 
-Supabase joue le role central :
-- **Base de donnees** : stocke employes, pointages, commandes, statuts
-- **Realtime (WebSocket)** : notifie le PC local instantanement quand une nouvelle commande est inseree
-- **API REST** : utilisee par le dashboard Vercel pour les operations CRUD
+Base de donnees PostgreSQL :
+- Stocke employes, pointages, statuts
+- API REST pour le dashboard
+- Realtime pour les mises a jour en temps reel du dashboard
 
 Tables principales :
 | Table | Role |
 |-------|------|
-| `sites` | Infos du site (adresse, IP pointeuse, statut bridge) |
+| `sites` | Infos du site (adresse, SN pointeuse, statut) |
 | `employees` | Liste des employes et leur code pointeuse |
 | `attendances` | Historique des pointages |
-| `device_commands` | File d'attente des commandes a envoyer a la pointeuse |
-| `device_status` | Etat actuel de la pointeuse (connectee, nb utilisateurs, etc.) |
+| `device_status` | Etat actuel de la pointeuse |
 
-### 3. PC Windows (Bridge Python)
+**Note :** La table `device_commands` n'est plus necessaire — les commandes sont envoyees directement a la pointeuse via le TA PUSH SDK (HTTP), sans file d'attente intermediaire.
 
-Programme Python qui tourne en permanence sur un PC au sein du site.
-Il fait la passerelle entre Supabase (cloud) et la pointeuse (reseau local).
+### 3. Horus E1-FP (Pointeuse)
 
-Ses responsabilites :
-- **Ecouter les commandes** venant de Supabase via Realtime (WebSocket)
-- **Executer les commandes** sur la pointeuse via zkemkeeper.dll
-- **Remonter les pointages** : quand un employe pointe, le bridge insere le pointage dans Supabase
-- **Heartbeat** : signaler regulierement que le bridge est en ligne
-- **Reconnexion automatique** : si la pointeuse ou internet se deconnecte, le bridge retente
-
-### 4. Horus E1 (Pointeuse)
-
-La pointeuse est sur le reseau local du site.
-Le PC communique avec elle en UDP sur le port 4370 via le SDK zkemkeeper.dll.
-La pointeuse ne parle **jamais directement au cloud**.
+La pointeuse communique **directement avec Vercel** via 4G :
+- **Push** : envoie les pointages en temps reel vers notre API (HTTP POST)
+- **Pull** : recoit les commandes (ajout/suppression users) depuis notre API
+- Fonctionne de maniere **autonome** avec une Nano SIM 4G
+- Batterie 8h pour les coupures d'electricite
+- Stocke les pointages localement si le reseau est indisponible, et les renvoie a la reconnexion
 
 ---
 
@@ -133,312 +125,81 @@ La pointeuse ne parle **jamais directement au cloud**.
 
 ```
 1. Le RH clique "Ajouter Jean Camara" sur le dashboard
-2. Vercel envoie a Supabase :
-   - INSERT dans la table employees (code: '001', name: 'Jean Camara')
-   - INSERT dans la table device_commands :
-     {type: 'add_user', payload: {code: '001', name: 'Jean Camara'}, status: 'pending'}
 
-3. Supabase notifie le PC via Realtime (WebSocket)
+2. Vercel :
+   a. INSERT dans Supabase table employees (code: '001', name: 'Jean Camara')
+   b. Envoie la commande directement a la pointeuse via TA PUSH SDK (HTTP)
 
-4. Le PC recoit la commande, met le status a 'processing'
+3. La pointeuse recoit la commande via 4G et ajoute l'utilisateur
 
-5. Le PC execute via zkemkeeper.dll :
-   a. EnableDevice(1, false)          -- desactive la pointeuse pendant l'operation
-   b. SetStrCardNumber(cardNumber)    -- (optionnel) associe un badge RFID
-   c. SSR_SetUserInfo(1, '001', 'Jean Camara', '', 0, true)
-      - Param 1 : machine number (1 en TCP, ignore)
-      - Param 2 : employee_code (BSTR, max ~PIN2Width~ caracteres)
-      - Param 3 : nom
-      - Param 4 : mot de passe (vide = pas de mot de passe)
-      - Param 5 : privilege (0=user, 1=enroller, 2=admin, 3=superadmin)
-      - Param 6 : actif (true)
-   d. RefreshData(1)                  -- force la pointeuse a recharger ses donnees
-   e. EnableDevice(1, true)           -- reactive la pointeuse
-
-6. zkemkeeper envoie la commande en UDP a la pointeuse
-7. La pointeuse confirme (retour true)
-8. Le PC met le status a 'completed' dans Supabase
-9. Le dashboard affiche "Employe ajoute avec succes"
+4. Le dashboard affiche "Employe ajoute avec succes"
 ```
 
 ### Flux 2 — Enrolement visage
 
-Le Horus E1 est un appareil **FacePro** (reconnaissance faciale en lumiere visible).
-L'enrolement se fait **directement sur la pointeuse** : l'employe se place devant la camera.
-
 ```
 1. Le RH clique "Enroler le visage" pour Jean Camara
-2. Vercel insere dans device_commands :
-   {type: 'enroll_face', payload: {code: '001'}, status: 'pending'}
 
-3. Le PC recoit la commande via Realtime
+2. Vercel envoie la commande d'enrolement a la pointeuse via TA PUSH SDK
 
-4. Le PC execute via zkemkeeper.dll :
-   a. CancelOperation()              -- annule toute operation en cours
-   b. L'enrolement facial se fait physiquement sur la pointeuse
-      (l'employe se place devant la camera, la pointeuse capture le visage)
+3. La pointeuse affiche "Placez votre visage devant la camera"
 
-   Note : pour les templates face (IFACE), le SDK utilise :
-   - SetUserFace / SetUserFaceStr avec dwFaceIndex = 50 (valeur fixe obligatoire)
-   - Chaque utilisateur a ~15 templates sous differents angles (~37 Ko total)
+4. L'employe se presente devant la pointeuse
 
-   Pour les FacePro (visible light), l'alternative est l'envoi de photo :
-   - Format fichier : verify_biophoto_9_{user_id}.jpg
-   - Via SendUserFacePhoto(machineNumber, filePath)
+5. La pointeuse capture le visage et enregistre le template
 
-5. La pointeuse affiche "Placez votre visage devant la camera"
-6. L'employe presente son visage
-7. La pointeuse enregistre le visage et confirme
-   - Evenement OnEnrollFingerEx declenche (malgre le nom, couvre aussi le visage)
-   - ActionResult = 0 : succes, autres valeurs : echec
-8. Le PC met status = 'completed' et met a jour enrolled = true dans employees
+6. La pointeuse confirme via push HTTP → Vercel met a jour enrolled = true
 ```
 
-### Flux 3 — Enrolement empreinte
-
-```
-1. Le RH clique "Enroler empreinte" pour Jean Camara (doigt index droit)
-2. Vercel insere dans device_commands :
-   {type: 'enroll_finger', payload: {code: '001', finger_index: 1}, status: 'pending'}
-
-3. Le PC recoit la commande via Realtime
-
-4. Le PC execute via zkemkeeper.dll :
-   a. CancelOperation()
-   b. SSR_DelUserTmpExt(1, '001', 1)  -- supprime le template existant si besoin
-   c. StartEnrollEx('001', 1, 1)
-      - Param 1 : employee_code
-      - Param 2 : finger_index (0-9, un par doigt)
-      - Param 3 : flag (0=invalide, 1=valide, 3=empreinte de contrainte)
-
-5. La pointeuse entre en mode enrolement, l'employe scanne 3 fois son doigt
-
-6. Evenement OnEnrollFingerEx declenche :
-   - sEnrollNumber : code de l'employe
-   - iFingerIndex : index du doigt
-   - iActionResult : 0=succes
-   - iTemplateLength : taille du template
-
-7. Le PC appelle StartIdentify() pour remettre la pointeuse en mode normal
-8. Le PC met status = 'completed' dans Supabase
-```
-
-### Flux 4 — Un employe pointe (quotidien)
+### Flux 3 — Un employe pointe (quotidien)
 
 ```
 1. L'employe se presente devant la pointeuse
 
-2. La pointeuse reconnait son visage (ou empreinte, ou badge)
+2. La pointeuse reconnait son visage (ou empreinte)
 
-3. La pointeuse declenche l'evenement OnAttTransactionEx avec ces parametres :
-   - EnrollNumber (BSTR) : code de l'employe (ex: '001')
-   - IsInValid (LONG) : 0=valide, 1=invalide
-   - AttState (LONG) : statut du pointage
-       0 = Check-In (entree)
-       1 = Check-Out (sortie)
-       2 = Break-Out (debut pause)
-       3 = Break-In (fin pause)
-       4 = OT-In (debut heures sup)
-       5 = OT-Out (fin heures sup)
-   - VerifyMethod (LONG) : methode de verification
-       0 = mot de passe
-       1 = empreinte digitale
-       15 = visage (face)
-       2 = carte RFID
-   - Year, Month, Day, Hour, Minute, Second : horodatage
-   - WorkCode (LONG) : code travail (0 si non utilise)
+3. La pointeuse envoie un HTTP POST vers Vercel /api/webhook/attendance :
+   {
+     employee_code: '001',
+     punch_time: '2026-03-03 08:02:00',
+     verify_type: 'face',
+     punch_type: 'IN'
+   }
 
-4. Le PC capture l'evenement via zkemkeeper.dll
+4. Vercel recoit le POST et insere dans Supabase (table attendances)
 
-5. Le PC mappe les valeurs et insere dans Supabase :
-   - Table attendances :
-     employee_code = '001'
-     punch_time = '2026-03-01 08:02:00'
-     verify_type = 'face'         (VerifyMethod 15 → 'face')
-     punch_type = 'IN'            (AttState 0 → 'IN')
-
-6. Le dashboard affiche le pointage en temps reel
+5. Le dashboard affiche le pointage en temps reel
 ```
 
-**Mapping VerifyMethod → verify_type :**
-| VerifyMethod | verify_type |
-|-------------|-------------|
-| 0 | password |
-| 1 | fingerprint |
-| 2 | card |
-| 15 | face |
-
-**Mapping AttState → punch_type :**
-| AttState | punch_type |
-|---------|------------|
-| 0 | IN |
-| 1 | OUT |
-| 2 | BREAK_OUT |
-| 3 | BREAK_IN |
-| 4 | OT_IN |
-| 5 | OT_OUT |
-
-### Flux 5 — Supprimer un employe
+### Flux 4 — Supprimer un employe
 
 ```
 1. Le RH clique "Supprimer" sur le dashboard
-2. Vercel insere dans device_commands :
-   {type: 'delete_user', payload: {code: '001'}, status: 'pending'}
 
-3. Le PC recoit la commande via Realtime
+2. Vercel envoie la commande de suppression a la pointeuse via TA PUSH SDK
 
-4. Le PC execute via zkemkeeper.dll :
-   a. EnableDevice(1, false)
-   b. SSR_DeleteEnrollData(1, '001', 12)
-      - dwBackupNumber = 12 : supprime l'utilisateur complet
-        (empreintes + carte + mot de passe + visage)
-      Variantes :
-        0-9 = supprimer une empreinte specifique (index du doigt)
-        10 = supprimer le mot de passe uniquement
-        11 = supprimer toutes les empreintes
-        12 = supprimer l'utilisateur complet
-        13 = supprimer toutes les empreintes (version optimisee, SSR_DeleteEnrollDataExt)
-   c. RefreshData(1)
-   d. EnableDevice(1, true)
+3. La pointeuse supprime l'employe et ses donnees biometriques
 
-5. La pointeuse supprime l'employe et ses donnees biometriques
-6. Le PC met status = 'completed'
-7. Vercel supprime l'employe de la table employees
+4. Vercel supprime l'employe de Supabase
 ```
 
-### Flux 6 — Heartbeat (surveillance continue)
+### Flux 5 — Pointeuse hors-ligne (coupure reseau)
 
 ```
-Toutes les 30 secondes :
+1. La pointeuse perd le reseau 4G (coupure, zone blanche)
 
-1. Le PC interroge la pointeuse via zkemkeeper.dll :
-   - GetDeviceStatus(1, 2, ref value)   → nombre d'utilisateurs  (dwStatus=2)
-   - GetDeviceStatus(1, 21, ref value)  → nombre de visages      (dwStatus=21)
-   - GetDeviceStatus(1, 3, ref value)   → nombre d'empreintes    (dwStatus=3)
-   - GetSerialNumber(1, ref sn)         → numero de serie
+2. Les employes continuent de pointer normalement
+   → les pointages sont stockes localement sur la pointeuse
 
-   Autres infos disponibles (dwStatus) :
-     1 = nombre d'administrateurs
-     4 = nombre de mots de passe
-     6 = nombre d'enregistrements de pointage
-     7 = capacite max empreintes
-     8 = capacite max utilisateurs
-     22 = capacite max visages
+3. Le reseau revient
 
-2. Le PC met a jour dans Supabase :
-   - Table device_status :
-     {is_connected: true, user_count: 45, face_count: 42, fp_count: 30, last_ping: now}
-   - Table sites :
-     {bridge_status: 'online', bridge_last_seen: now}
+4. La pointeuse renvoie automatiquement tous les pointages en attente
+   vers Vercel /api/webhook/attendance
 
-3. Le dashboard affiche l'etat en temps reel
+5. Vercel insere les pointages dans Supabase (avec deduplication)
 
-4. Si la pointeuse ne repond pas :
-   - Le PC met is_connected = false
-   - Le PC tente une reconnexion : Disconnect() puis Connect_Net(IP, 4370)
+6. Le dashboard se met a jour
 ```
-
----
-
-## Detail technique du SDK zkemkeeper.dll
-
-### Installation prealable sur le PC
-
-Le SDK est un composant **COM (ActiveX)**. Il doit etre enregistre sur Windows avant utilisation :
-
-1. Copier les DLL du SDK dans `%windir%\SysWOW64` (Windows 64-bit)
-2. Ouvrir un terminal administrateur
-3. Executer : `regsvr32.exe %windir%\SysWOW64\zkemkeeper.dll`
-
-Alternative : executer le script `Register_SDK.bat` fourni avec le SDK en mode administrateur.
-
-**Version du SDK :** 6.3.1.55 (la plus recente, supporte les firmwares avec cle COM securisee)
-
-### Acces depuis Python
-
-Le bridge Python accede au SDK via COM :
-```
-win32com.client.Dispatch("zkemkeeper.ZKEM.1")
-```
-Ou via comtypes comme alternative.
-
-### Connexion a la pointeuse
-
-```
-Connect_Net(IP, Port) → bool
-- IP : adresse IP de la pointeuse sur le reseau local
-- Port : 4370 (defaut, UDP)
-- Retour : true si connexion reussie
-
-Disconnect() → void
-- Deconnecte et libere les ressources
-```
-
-Si un mot de passe COM est configure sur la pointeuse :
-```
-SetCommPasswordEx(commKey)    -- definir le mot de passe cote PC (BSTR, alphanumerique)
-Connect_Net(IP, Port)         -- se connecter ensuite
-```
-
-### Ecoute des evenements temps reel
-
-Le bridge doit s'abonner aux evenements pour capturer les pointages :
-
-```
-RegEvent(machineNumber, 65535)    -- 65535 = tous les evenements
-```
-
-Masques d'evenements disponibles :
-| Masque | Evenement |
-|--------|-----------|
-| 1 | OnAttTransactionEx (pointage) |
-| 2 | OnFinger (doigt detecte) |
-| 4 | OnNewUser (nouvel utilisateur) |
-| 8 | OnEnrollFingerEx (enrolement termine) |
-| 16 | OnKeyPress (touche pressee) |
-| 256 | OnVerify (verification en cours) |
-| 512 | OnFingerFeature (qualite empreinte) |
-| 1024 | OnDoor / OnAlarm |
-| 65535 | Tous les evenements |
-
-### Evenement principal : OnAttTransactionEx
-
-Declenche a chaque pointage reussi :
-```
-OnAttTransactionEx(
-    EnrollNumber,    -- BSTR : code employe
-    IsInValid,       -- LONG : 0=valide
-    AttState,        -- LONG : 0=IN, 1=OUT, 2=BREAK_OUT, 3=BREAK_IN
-    VerifyMethod,    -- LONG : 0=password, 1=fingerprint, 2=card, 15=face
-    Year, Month, Day, Hour, Minute, Second,
-    WorkCode         -- LONG : code travail
-)
-```
-
-### Pattern obligatoire pour les operations sur la pointeuse
-
-Avant toute operation critique (ajout/suppression d'utilisateurs, templates) :
-
-```
-1. EnableDevice(machineNumber, false)    -- desactive la pointeuse (bloque empreinte/clavier/carte)
-2. ... effectuer l'operation ...
-3. RefreshData(machineNumber)            -- force le rechargement des donnees
-4. EnableDevice(machineNumber, true)     -- reactive la pointeuse
-```
-
-### Codes d'erreur principaux (GetLastError)
-
-| Code | Description |
-|------|-------------|
-| 0 | Succes / pas de donnees |
-| -1 | SDK non initialise, reconnecter |
-| -2 | Erreur lecture/ecriture |
-| -4 | Espace insuffisant |
-| -5 | Donnees deja existantes |
-| -6 | Mauvais mot de passe COM |
-| -100 | Non supporte ou donnees inexistantes |
-| -201 | Device occupe (busy) |
-| -307 | Timeout de connexion |
 
 ---
 
@@ -446,13 +207,11 @@ Avant toute operation critique (ajout/suppression d'utilisateurs, templates) :
 
 | Situation | Comportement |
 |-----------|-------------|
-| **Pointeuse eteinte / deconnectee** | Le bridge detecte la perte de connexion au prochain heartbeat. Il passe `device_status.is_connected = false`. Les commandes restent en `pending` et seront executees quand la pointeuse revient. Le bridge tente une reconnexion toutes les 30 secondes. |
-| **PC perd internet** | Les pointages sont captures localement mais ne peuvent pas etre envoyes. A la reconnexion, le bridge rattrape les evenements et les pousse vers Supabase. Les commandes en attente dans Supabase seront recuperees a la reconnexion. |
-| **Commande echoue (timeout > 60s)** | Le bridge met `status = 'failed'` avec le detail de l'erreur dans le champ `result` (code erreur SDK inclus). Le dashboard affiche l'erreur au RH. |
-| **PC eteint** | Le champ `bridge_last_seen` n'est plus mis a jour. Le dashboard detecte que le bridge est offline apres quelques minutes sans heartbeat. |
-| **SDK crash (code erreur -1)** | Le bridge capture l'exception, log l'erreur, appelle `Disconnect()` puis retente `Connect_Net()`. |
-| **Device occupe (code erreur -201)** | Le bridge attend quelques secondes et retente l'operation. La pointeuse est temporairement occupee (enrolement en cours, menu ouvert, etc.). |
-| **Mauvais mot de passe COM (code -6)** | Le bridge log l'erreur. Il faut verifier que `SetCommPasswordEx` est appele avec le bon mot de passe avant `Connect_Net`. |
+| **Coupure 4G** | Les pointages sont stockes localement sur la pointeuse. Renvoi automatique a la reconnexion. |
+| **Coupure electricite** | La pointeuse a 8h de batterie. Elle continue de fonctionner et de pointer. |
+| **Pointeuse eteinte** | Le dashboard detecte l'absence de heartbeat. Les commandes en attente seront traitees au redemarrage. |
+| **Serveur Vercel indisponible** | La pointeuse stocke les pointages et retente. Vercel a un uptime de 99.99%. |
+| **Doublon de pointage** | Le backend Vercel deduplique (meme employee_code + meme timestamp = ignore). |
 
 ---
 
@@ -462,11 +221,15 @@ Avant toute operation critique (ajout/suppression d'utilisateurs, templates) :
 |--------|-------------|
 | Dashboard | Next.js (Vercel) |
 | Base de donnees | Supabase (PostgreSQL) |
-| Communication cloud ↔ PC | Supabase Realtime (WebSocket) |
-| Bridge (PC local) | Python + win32com / comtypes |
-| SDK pointeuse | zkemkeeper.dll v6.3.1.55 (COM/ActiveX) |
-| Protocole pointeuse | UDP port 4370 |
-| Pointeuse | Horus E1 (serie FacePro, visible light face) |
+| Communication pointeuse ↔ cloud | **TA PUSH SDK (HTTP POST via 4G)** |
+| Pointeuse | Horus E1-FP (Nano SIM 4G, batterie 8h) |
+
+**Composants supprimes** (par rapport a l'ancienne architecture) :
+- ~~PC Windows local~~
+- ~~Bridge Python~~
+- ~~zkemkeeper.dll (Standalone SDK)~~
+- ~~Supabase Realtime (WebSocket vers PC)~~
+- ~~Table device_commands~~
 
 ---
 
@@ -478,11 +241,10 @@ Avant toute operation critique (ajout/suppression d'utilisateurs, templates) :
 | id | UUID | Identifiant unique |
 | name | VARCHAR(100) | Nom du site |
 | address | TEXT | Adresse physique |
-| device_ip | VARCHAR(15) | IP de la pointeuse sur le reseau local |
-| device_port | INTEGER | Port UDP (defaut: 4370) |
 | device_sn | VARCHAR(50) | Numero de serie de la pointeuse |
-| bridge_status | VARCHAR(20) | 'online' ou 'offline' |
-| bridge_last_seen | TIMESTAMP | Dernier signe de vie du bridge |
+| device_status | VARCHAR(20) | 'online' ou 'offline' |
+| last_heartbeat | TIMESTAMP | Dernier signe de vie de la pointeuse |
+| created_at | TIMESTAMP | Date de creation |
 
 ### employees
 | Colonne | Type | Description |
@@ -493,6 +255,7 @@ Avant toute operation critique (ajout/suppression d'utilisateurs, templates) :
 | site_id | UUID | Site de rattachement |
 | enrolled | BOOLEAN | Biometrie enregistree ou non |
 | enrolled_at | TIMESTAMP | Date d'enrolement |
+| created_at | TIMESTAMP | Date de creation |
 
 ### attendances
 | Colonne | Type | Description |
@@ -504,17 +267,7 @@ Avant toute operation critique (ajout/suppression d'utilisateurs, templates) :
 | punch_type | VARCHAR(10) | 'IN', 'OUT', 'BREAK_OUT', 'BREAK_IN', 'OT_IN', 'OT_OUT' |
 | verify_type | VARCHAR(20) | 'face', 'fingerprint', 'card', 'password' |
 | device_sn | VARCHAR(50) | Numero de serie de la pointeuse |
-
-### device_commands
-| Colonne | Type | Description |
-|---------|------|-------------|
-| id | UUID | Identifiant unique |
-| site_id | UUID | Site cible |
-| command_type | VARCHAR(30) | 'add_user', 'delete_user', 'enroll_face', 'enroll_finger', 'restart_device' |
-| payload | JSONB | Donnees de la commande |
-| status | VARCHAR(20) | 'pending', 'processing', 'completed', 'failed' |
-| result | JSONB | Resultat de l'execution (inclut le code erreur SDK si echec) |
-| processed_at | TIMESTAMP | Date de traitement |
+| created_at | TIMESTAMP | Date d'insertion |
 
 ### device_status
 | Colonne | Type | Description |
@@ -522,34 +275,79 @@ Avant toute operation critique (ajout/suppression d'utilisateurs, templates) :
 | id | UUID | Identifiant unique |
 | site_id | UUID | Site (unique) |
 | is_connected | BOOLEAN | Pointeuse joignable ou non |
-| user_count | INTEGER | Nombre d'utilisateurs enregistres (GetDeviceStatus dwStatus=2) |
-| face_count | INTEGER | Nombre de visages enregistres (GetDeviceStatus dwStatus=21) |
-| fp_count | INTEGER | Nombre d'empreintes enregistrees (GetDeviceStatus dwStatus=3) |
+| user_count | INTEGER | Nombre d'utilisateurs enregistres |
+| face_count | INTEGER | Nombre de visages enregistres |
+| fp_count | INTEGER | Nombre d'empreintes enregistrees |
 | last_ping | TIMESTAMP | Dernier ping reussi |
 
 ---
 
-## Reference rapide des fonctions SDK utilisees par le bridge
+## Alternative evaluee : CAMS Biometrics
 
-| Operation | Fonction SDK | Parametres cles |
-|-----------|-------------|----------------|
-| Connexion | `Connect_Net(IP, Port)` | IP pointeuse, port 4370 |
-| Deconnexion | `Disconnect()` | -- |
-| Mot de passe COM | `SetCommPasswordEx(key)` | Appeler avant Connect_Net |
-| Ajouter utilisateur | `SSR_SetUserInfo(machNo, code, name, pwd, privilege, enabled)` | privilege: 0=user |
-| Supprimer utilisateur | `SSR_DeleteEnrollData(machNo, code, 12)` | 12=suppression complete |
-| Enrolement empreinte | `StartEnrollEx(code, fingerIndex, flag)` | flag: 1=valide |
-| Fin enrolement | `StartIdentify()` | Remet en mode normal |
-| Annuler operation | `CancelOperation()` | -- |
-| Template visage get | `GetUserFaceStr(machNo, code, 50, data, length)` | index 50 obligatoire |
-| Template visage set | `SetUserFaceStr(machNo, code, 50, data, length)` | index 50 obligatoire |
-| Photo visage (FacePro) | `SendUserFacePhoto(machNo, filePath)` | fichier: verify_biophoto_9_{id}.jpg |
-| Ecouter evenements | `RegEvent(machNo, 65535)` | 65535 = tous |
-| Statut device | `GetDeviceStatus(machNo, dwStatus, ref value)` | dwStatus: 2=users, 3=fp, 21=faces |
-| Numero de serie | `GetSerialNumber(machNo, ref sn)` | -- |
-| Bloquer pointeuse | `EnableDevice(machNo, false)` | Avant operation critique |
-| Debloquer pointeuse | `EnableDevice(machNo, true)` | Apres operation |
-| Rafraichir donnees | `RefreshData(machNo)` | Apres modification |
-| Redemarrer | `RestartDevice(machNo)` | -- |
-| Eteindre | `PowerOffDevice(machNo)` | -- |
-| Derniere erreur | `GetLastError(ref errorCode)` | Apres chaque echec |
+Nous avons aussi evalue CAMS Biometrics (modele Hawking Plus f38+) comme alternative :
+
+| Critere | ZKTeco Horus E1-FP | CAMS f38+ |
+|---------|-------------------|-----------|
+| **4G natif** | ✅ Nano SIM | ❌ Routeur WiFi externe |
+| **Batterie** | ✅ 8h | ❌ Non |
+| **API directe cloud** | ✅ TA PUSH SDK | ✅ Web API 3.0 |
+| **PC bridge** | ❌ Pas besoin | ❌ Pas besoin |
+| **Prix device** | ~$359 (Microless Global) | 220 USD |
+| **Prix API/SDK** | $400 | 120-300 USD |
+| **Portabilite** | ✅ Portable | ❌ Fixe |
+| **Livraison** | En attente | 3-4 jours DHL |
+
+**Decision : Horus E1-FP** — le 4G natif et la batterie 8h sont decisifs pour la Guinee.
+CAMS reste une **option de secours** si ZKTeco ne repond pas ou si le prix est trop eleve.
+
+---
+
+## Historique des decisions
+
+| Date | Decision | Raison |
+|------|----------|--------|
+| 2026-03-01 | Choix initial : SDK Standalone + PC bridge | Architecture classique ZKTeco |
+| 2026-03-02 | Evaluation UTimeMaster | Reponse ZKTeco proposant 2 options |
+| 2026-03-02 | Rejet UTimeMaster | Vendor lock-in, polling uniquement, cout recurrent |
+| 2026-03-03 | Evaluation CAMS Biometrics | Alternative avec Web API directe |
+| 2026-03-03 | **Pivot vers TA PUSH SDK** | ZKTeco confirme que le Horus E1-FP supporte le push direct via 4G. Plus besoin de PC bridge. |
+| 2026-03-03 | **Architecture finale : Horus E1-FP + TA PUSH SDK + Vercel + Supabase** | Architecture simplifiee, 4G natif, pas de PC, pas de middleware |
+| 2026-03-04 | Evaluation Hikvision DS-K1T341CMF | ISAPI = LAN only, ISUP = middleware proprietaire. Incompatible cloud direct. **Rejete.** |
+| 2026-03-04 | Re-evaluation CAMS Biometrics | Cloud CAMS obligatoire comme intermediaire. Vendor lock-in + licence annuelle. **Rejete.** |
+| 2026-03-04 | Re-evaluation Anviz CrossChex Cloud | Pas d'API gestion users. Webhooks non fiables. **Rejete.** |
+| 2026-03-04 | **Decision : achat device Microless Global + SDK direct ZKTeco** | Device ~$359 sur Microless + SDK TA PUSH direct aupres de ZKTeco. Mail envoye a sales@zkteco.com. |
+
+---
+
+## Achat du device — Lien direct
+
+**Microless Global** (Dubai, livraison mondiale 4-8 jours) :
+[https://global.microless.com/product/zkteco-horus-e1-fp-wireless-time-attendance-terminal-facial-recognition-face-finger-card-3-meter-range-scanning-supports-4g-wifi-bluetooth-gps-mask-detection-horus-e1-fp/](https://global.microless.com/product/zkteco-horus-e1-fp-wireless-time-attendance-terminal-facial-recognition-face-finger-card-3-meter-range-scanning-supports-4g-wifi-bluetooth-gps-mask-detection-horus-e1-fp/)
+
+**Prix :** $358.90 USD (~€330) + frais d'import/TVA au checkout
+
+---
+
+## Alternatives evaluees et rejetees
+
+### Hikvision DS-K1T341CMF (~$247)
+- Face + Empreinte + Badge, WiFi/Ethernet
+- **Rejete** : ISAPI est un protocole LAN, pas cloud. ISUP necessite un serveur middleware proprietaire (C/C++). Incompatible avec Vercel serverless.
+
+### CAMS Biometrics Hawking Plus f38+ (~$220 + $120-300 API)
+- Face + Empreinte, WiFi
+- **Rejete** : Le cloud CAMS est un intermediaire obligatoire (Device → CAMS Cloud → Notre serveur). Licence annuelle $60-120/an. Latence 15-60s pour les commandes. Pas de 4G natif.
+
+### Anviz CrossChex Cloud (FaceDeep 3, W2 Face)
+- Face + RFID (FD3) ou Face + Empreinte (W2)
+- **Rejete** : Pas d'API pour gerer les users (lecture seule). Webhooks non fiables. Cloud Anviz obligatoire. $99/an par device.
+
+**Conclusion : Le ZKTeco Horus E1-FP avec TA PUSH SDK reste la seule option qui permet un push HTTP direct vers notre serveur sans intermediaire.**
+
+---
+
+## Documentation SDK de reference
+
+- SDK Standalone (zkemkeeper.dll) : inclus dans le ZIP du repo (reference uniquement, **non utilise**)
+- **TA PUSH SDK** : documentation demandee a ZKTeco (mail envoye a sales@zkteco.com le 2026-03-04)
+- CAMS Web API 3.0 : [camsbiometrics.com/application/biometric-web-api.html](https://camsbiometrics.com/application/biometric-web-api.html) (reference alternative, **rejete**)
