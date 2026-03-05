@@ -10,8 +10,8 @@ Variantes disponibles :
 - [Horus E1-FP](https://zkteco.technology/en/product/horus-e1-fp/) — visage + empreinte ← **modele choisi**
 - [Horus E1-RFID](https://zkteco.technology/en/product/horus-e1-rfid/) — visage + badge RFID
 
-La pointeuse communique **directement avec le cloud** via 4G grace au **TA PUSH SDK**.
-**Pas de PC local necessaire.**
+La pointeuse communique **directement avec le cloud** via 4G grace au **protocole PUSH (Attendance PUSH Communication Protocol)**.
+**Pas de PC local necessaire.** Le device est le client HTTP — il fait des requetes vers notre serveur.
 
 ---
 
@@ -47,14 +47,15 @@ ZKTeco propose trois options pour integrer le Horus E1-FP :
 │  │ (Next.js) │────>│  (BDD)       │  │
 │  │ Dashboard │     │              │  │
 │  │           │     │              │  │
-│  │ /api/webhook <──┼── INSERT     │  │
-│  │ /api/commands ──┼── SELECT     │  │
+│  │ /iclock/cdata    <── INSERT     │  │
+│  │ /iclock/getrequest ── SELECT   │  │
+│  │ /iclock/devicecmd <── UPDATE   │  │
 │  └───────────┘     └──────────────┘  │
 │        ^                             │
 │        │                             │
 └────────┼─────────────────────────────┘
          │
-    HTTP POST (JSON)
+    HTTP GET/POST (texte tabule)
     via 4G (Nano SIM)
          │
 ┌────────┼─────────────────────────────┐
@@ -87,9 +88,14 @@ Interface web utilisee par les RH pour :
 - Consulter les pointages
 - Voir le statut de la pointeuse en temps reel
 
-Le dashboard expose aussi des **API Routes** qui recoivent les donnees de la pointeuse :
-- `/api/webhook/attendance` — recoit les pointages en push (HTTP POST)
-- `/api/commands` — envoie des commandes a la pointeuse (ajout/suppression users)
+Le dashboard expose des **API Routes** compatibles avec le protocole PUSH ZKTeco :
+- `GET /iclock/cdata?SN=xxx` — initialisation du device (echange de configuration)
+- `POST /iclock/cdata?SN=xxx&Stamp=xxx` — reception des pointages et donnees utilisateurs
+- `GET /iclock/getrequest?SN=xxx` — le device poll pour recuperer les commandes en attente
+- `POST /iclock/devicecmd?SN=xxx` — le device confirme l'execution d'une commande
+
+**Important :** Le device est toujours le client HTTP. Le serveur ne contacte jamais le device directement.
+Les commandes sont stockees en BDD (table `device_commands`) et envoyees quand le device poll.
 
 ### 2. Supabase (BDD)
 
@@ -104,9 +110,11 @@ Tables principales :
 | `sites` | Infos du site (adresse, SN pointeuse, statut) |
 | `employees` | Liste des employes et leur code pointeuse |
 | `attendances` | Historique des pointages |
+| `device_commands` | File d'attente des commandes a envoyer au device (polling) |
 | `device_status` | Etat actuel de la pointeuse |
 
-**Note :** La table `device_commands` n'est plus necessaire — les commandes sont envoyees directement a la pointeuse via le TA PUSH SDK (HTTP), sans file d'attente intermediaire.
+**Note :** La table `device_commands` est necessaire — le protocole PUSH fonctionne par polling.
+Le device appelle `GET /iclock/getrequest` a intervalle regulier pour recuperer les commandes en attente.
 
 ### 3. Horus E1-FP (Pointeuse)
 
@@ -128,27 +136,37 @@ La pointeuse communique **directement avec Vercel** via 4G :
 
 2. Vercel :
    a. INSERT dans Supabase table employees (code: '001', name: 'Jean Camara')
-   b. Envoie la commande directement a la pointeuse via TA PUSH SDK (HTTP)
+   b. INSERT dans Supabase table device_commands :
+      {type: 'add_user', payload: {PIN: '001', Name: 'Jean Camara'}, status: 'pending'}
 
-3. La pointeuse recoit la commande via 4G et ajoute l'utilisateur
+3. La pointeuse poll GET /iclock/getrequest?SN=xxx
+   → Vercel repond avec : C:123:DATA UPDATE USERINFO PIN=001\tName=Jean Camara
 
-4. Le dashboard affiche "Employe ajoute avec succes"
+4. La pointeuse execute la commande et confirme via POST /iclock/devicecmd
+
+5. Vercel met a jour device_commands.status = 'completed'
+
+6. Le dashboard affiche "Employe ajoute avec succes"
 ```
+
+**Note :** Le delai depend de l'intervalle de polling du device (a configurer).
 
 ### Flux 2 — Enrolement visage
 
 ```
 1. Le RH clique "Enroler le visage" pour Jean Camara
 
-2. Vercel envoie la commande d'enrolement a la pointeuse via TA PUSH SDK
+2. Vercel INSERT device_commands : {type: 'enroll_face', payload: {PIN: '001'}}
 
-3. La pointeuse affiche "Placez votre visage devant la camera"
+3. La pointeuse poll et recoit la commande d'enrolement
 
-4. L'employe se presente devant la pointeuse
+4. La pointeuse affiche "Placez votre visage devant la camera"
 
-5. La pointeuse capture le visage et enregistre le template
+5. L'employe se presente devant la pointeuse
 
-6. La pointeuse confirme via push HTTP → Vercel met a jour enrolled = true
+6. La pointeuse capture le visage et enregistre le template
+
+7. La pointeuse confirme via POST /iclock/devicecmd → Vercel met a jour enrolled = true
 ```
 
 ### Flux 3 — Un employe pointe (quotidien)
@@ -158,17 +176,17 @@ La pointeuse communique **directement avec Vercel** via 4G :
 
 2. La pointeuse reconnait son visage (ou empreinte)
 
-3. La pointeuse envoie un HTTP POST vers Vercel /api/webhook/attendance :
-   {
-     employee_code: '001',
-     punch_time: '2026-03-03 08:02:00',
-     verify_type: 'face',
-     punch_type: 'IN'
-   }
+3. La pointeuse envoie un HTTP POST vers Vercel POST /iclock/cdata?SN=xxx&Stamp=26
+   Corps (texte tabule, pas JSON) :
+   001\t2026-03-05 08:02:00\t0\t15\t0\t1
 
-4. Vercel recoit le POST et insere dans Supabase (table attendances)
+   Champs : PIN, Time, Status, Verify (15=face), Workcode, Reserved
 
-5. Le dashboard affiche le pointage en temps reel
+4. Vercel parse le texte tabule et insere dans Supabase (table attendances)
+
+5. Vercel repond "OK"
+
+6. Le dashboard affiche le pointage en temps reel
 ```
 
 ### Flux 4 — Supprimer un employe
@@ -176,11 +194,15 @@ La pointeuse communique **directement avec Vercel** via 4G :
 ```
 1. Le RH clique "Supprimer" sur le dashboard
 
-2. Vercel envoie la commande de suppression a la pointeuse via TA PUSH SDK
+2. Vercel INSERT device_commands : {type: 'delete_user', payload: {PIN: '001'}}
 
-3. La pointeuse supprime l'employe et ses donnees biometriques
+3. La pointeuse poll et recoit la commande de suppression
 
-4. Vercel supprime l'employe de Supabase
+4. La pointeuse supprime l'employe et ses donnees biometriques
+
+5. La pointeuse confirme via POST /iclock/devicecmd
+
+6. Vercel supprime l'employe de Supabase
 ```
 
 ### Flux 5 — Pointeuse hors-ligne (coupure reseau)
@@ -193,10 +215,10 @@ La pointeuse communique **directement avec Vercel** via 4G :
 
 3. Le reseau revient
 
-4. La pointeuse renvoie automatiquement tous les pointages en attente
-   vers Vercel /api/webhook/attendance
+4. La pointeuse reprend la transmission depuis le point d'arret (mecanisme Stamp)
+   POST /iclock/cdata?SN=xxx&Stamp=dernierStamp
 
-5. Vercel insere les pointages dans Supabase (avec deduplication)
+5. Vercel insere les pointages dans Supabase (avec deduplication via Stamp)
 
 6. Le dashboard se met a jour
 ```
@@ -221,7 +243,8 @@ La pointeuse communique **directement avec Vercel** via 4G :
 |--------|-------------|
 | Dashboard | Next.js (Vercel) |
 | Base de donnees | Supabase (PostgreSQL) |
-| Communication pointeuse ↔ cloud | **TA PUSH SDK (HTTP POST via 4G)** |
+| Protocole pointeuse ↔ cloud | **Attendance PUSH Communication Protocol v4.5 (HTTP GET/POST via 4G)** |
+| Format des donnees | Texte tabule (\\t = separateur champs, \\n = separateur lignes) |
 | Pointeuse | Horus E1-FP (Nano SIM 4G, batterie 8h) |
 
 **Composants supprimes** (par rapport a l'ancienne architecture) :
@@ -229,7 +252,7 @@ La pointeuse communique **directement avec Vercel** via 4G :
 - ~~Bridge Python~~
 - ~~zkemkeeper.dll (Standalone SDK)~~
 - ~~Supabase Realtime (WebSocket vers PC)~~
-- ~~Table device_commands~~
+- ~~Table device_commands~~ → **retablie** (necessaire pour le mecanisme de polling)
 
 ---
 
@@ -268,6 +291,19 @@ La pointeuse communique **directement avec Vercel** via 4G :
 | verify_type | VARCHAR(20) | 'face', 'fingerprint', 'card', 'password' |
 | device_sn | VARCHAR(50) | Numero de serie de la pointeuse |
 | created_at | TIMESTAMP | Date d'insertion |
+
+### device_commands (file de commandes — polling)
+| Colonne | Type | Description |
+|---------|------|-------------|
+| id | UUID | Identifiant unique |
+| site_id | UUID | Site concerne |
+| command_type | VARCHAR(30) | 'add_user', 'delete_user', 'enroll_face', 'enroll_finger', 'restart' |
+| payload | JSONB | Donnees de la commande (ex: {PIN: '001', Name: 'Jean'}) |
+| status | VARCHAR(20) | 'pending', 'sent', 'completed', 'failed' |
+| result | JSONB | Resultat retourne par le device |
+| created_at | TIMESTAMP | Date de creation |
+| sent_at | TIMESTAMP | Date d'envoi au device (via polling) |
+| completed_at | TIMESTAMP | Date de confirmation par le device |
 
 ### device_status
 | Colonne | Type | Description |
@@ -346,8 +382,61 @@ CAMS reste une **option de secours** si ZKTeco ne repond pas ou si le prix est t
 
 ---
 
+## Protocole PUSH — Details techniques
+
+### Document de reference
+- **Titre :** Attendance PUSH Communication Protocol
+- **Version logiciel :** 2.4.2
+- **Version document :** 4.5 (juillet 2022)
+- **Pages :** 158 (on a l'intro de 18 pages, document complet apres signature NDA)
+
+### Endpoints du protocole (cotes serveur — nos API Routes)
+
+| Route | Methode | Role |
+|-------|---------|------|
+| `/iclock/cdata?SN=xxx&options=all` | GET | Initialisation — echange de config (Stamp, options) |
+| `/iclock/cdata?SN=xxx&Stamp=xxx` | POST | Reception des pointages et donnees (texte tabule) |
+| `/iclock/getrequest?SN=xxx` | GET | Le device poll pour recuperer les commandes en attente |
+| `/iclock/devicecmd?SN=xxx` | POST | Le device confirme l'execution d'une commande |
+
+### Format des commandes (serveur → device via polling)
+```
+C:{CmdID}:{CmdDesc}
+Exemple : C:123:DATA UPDATE USERINFO PIN=001\tName=Jean Camara
+```
+
+### Format des pointages (device → serveur via POST)
+```
+Texte tabule : PIN\tTime\tStatus\tVerify\tWorkcode\tReserved
+Exemple : 001\t2026-03-05 08:02:00\t0\t15\t0\t1
+```
+
+Verify types : 1=empreinte, 15=visage
+
+### Mecanisme de reprise (Stamp)
+- Le serveur renvoie un `Stamp` a chaque echange
+- Le device stocke ce Stamp et reprend la transmission depuis ce point si deconnexion
+- Garantit zero perte de donnees meme en cas de coupure reseau
+
+### Commandes disponibles (Section 12 du protocole complet)
+- **Gestion users** : ajout, modification, suppression
+- **Templates biometriques** : empreinte, visage, veine, paume
+- **Enrolement a distance** : empreinte, carte, visage
+- **Photos utilisateur** : upload/download
+- **Controle device** : reboot, deverrouillage porte, annulation alarme
+- **Mise a jour firmware** : a distance
+- **Configuration** : options du device
+
+### Points a verifier (reunion Jessica — lundi 10 mars)
+- Support HTTPS (Vercel ne sert qu'en HTTPS)
+- Support nom de domaine (pas seulement IP)
+- Intervalle de polling configurable (delai de livraison des commandes)
+
+---
+
 ## Documentation SDK de reference
 
 - SDK Standalone (zkemkeeper.dll) : inclus dans le ZIP du repo (reference uniquement, **non utilise**)
-- **TA PUSH SDK** : documentation demandee a ZKTeco (mail envoye a sales@zkteco.com le 2026-03-04)
+- **Attendance PUSH Communication Protocol v4.5** : intro recue de ZKTeco Europe, document complet apres NDA
+- **Contact ZKTeco Europe** : Jessica Perret — jessica.perret@zkteco.eu — +34 650 082 720
 - CAMS Web API 3.0 : [camsbiometrics.com/application/biometric-web-api.html](https://camsbiometrics.com/application/biometric-web-api.html) (reference alternative, **rejete**)
